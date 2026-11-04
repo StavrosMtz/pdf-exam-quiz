@@ -31,72 +31,45 @@ function showToast(message){const t=$("toast");t.textContent=message;t.style.dis
 function showScreen(id){for(const s of ["homeScreen","quizScreen","resultsScreen"])$(s).classList.toggle("hidden",s!==id)}
 function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function normalize(s){return s.replace(/\s+/g," ").trim()}
-function redColor(rgb){
-  if(!rgb)return false;const [r,g,b]=rgb;
-  return r>=0.58 && g<=0.16 && b<=0.16 && r>g*3 && r>b*3;
+function redColor(r,g,b){
+  // Allow for anti-aliased red glyph pixels on the rendered page.
+  return r>105 && r>g*1.22 && r>b*1.22 && g<190 && b<190;
 }
-function rgbFromArgs(fn,args,OPS){
-  const name=OPS[fn];
-  const value=args?.[0];
-  if(typeof value==="string"){
-    const hex=value.match(/^#?([0-9a-f]{6})$/i);
-    if(hex)return [parseInt(hex[1].slice(0,2),16)/255,parseInt(hex[1].slice(2,4),16)/255,parseInt(hex[1].slice(4,6),16)/255];
-    const rgb=value.match(/rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/i);
-    if(rgb)return [Number(rgb[1])/255,Number(rgb[2])/255,Number(rgb[3])/255];
-  }
-  if((name==="setFillRGBColor"||name==="setFillColor"||name==="setFillColorN") && value?.length>=3){
-    const scale=Math.max(value[0],value[1],value[2])>1?255:1;
-    return [value[0]/scale,value[1]/scale,value[2]/scale];
-  }
-  if(name==="setFillGray" && typeof value==="number")return [value,value,value];
-  return null;
-}
-function glyphText(glyphs){
-  if(!Array.isArray(glyphs))return "";
-  return glyphs.map(g=>typeof g==="string"?g:(g?.unicode||"")).join("");
-}
-// Approximate text-item fill colors by aligning glyph strings in PDF drawing order.
 async function pageTextLines(page){
-  const [content,ops]=await Promise.all([page.getTextContent({includeMarkedContent:true}),page.getOperatorList()]);
-  const OPS=pdfjsLib.OPS;
-  let color=[0,0,0], chunks=[];
-  for(let i=0;i<ops.fnArray.length;i++){
-    const fn=ops.fnArray[i], args=ops.argsArray[i];
-    const next=rgbFromArgs(fn,args,OPS);if(next)color=next;
-    const name=OPS[fn];
-    if(name==="showText"||name==="showSpacedText"||name==="nextLineShowText"||name==="nextLineShowTextAndSpace"){
-      const raw=name==="showSpacedText"?(args?.[0]||[]):(args?.[0]||[]);
-      chunks.push({text:glyphText(raw),red:redColor(color)});
-    }
-  }
-  let joined=chunks.map(c=>c.text).join("");
-  let cursor=0;
-  const items=(content.items||[]).filter(x=>typeof x.str==="string"&&x.str.trim());
-  const mapped=items.map(item=>{
-    const target=item.str;
-    let at=joined.indexOf(target,cursor);
-    let isRed=false;
-    if(at>=0){
-      let pos=0, votes=0, reds=0;
-      for(const c of chunks){
-        const start=pos,end=pos+c.text.length;
-        const overlap=Math.max(0,Math.min(at+target.length,end)-Math.max(at,start));
-        votes+=overlap;if(c.red)reds+=overlap;pos=end;
-      }
-      isRed=reds>0 && reds>=votes*0.35;
-      cursor=at+target.length;
-    } else {
-      // If glyph mapping is unavailable, leave color unclassified rather than guessing.
-    }
-    const y=item.transform?.[5]??0;
-    return {text:item.str,red:isRed,y,x:item.transform?.[4]??0};
-  });
-  // Group text fragments into visual lines by baseline.
+  // Detect answer color from the actual rendered PDF pixels instead of trying
+  // to reconstruct PDF drawing operators (which varies between PDF producers).
+  const scale=1.35;
+  const viewport=page.getViewport({scale});
+  const canvas=document.createElement("canvas");
+  canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  await page.render({canvasContext:ctx,viewport}).promise;
+  const content=await page.getTextContent();
   const groups=[];
-  for(const it of mapped){
-    let g=groups.find(x=>Math.abs(x.y-it.y)<3);
-    if(!g){g={y:it.y,parts:[]};groups.push(g)}
-    g.parts.push(it);
+  for(const item of (content.items||[])){
+    if(typeof item.str!=="string"||!item.str.trim())continue;
+    const t=item.transform||[1,0,0,1,0,0];
+    const rect=viewport.convertToViewportRectangle([
+      t[4],t[5],t[4]+Math.max(item.width||0,1),t[5]+Math.max(item.height||Math.hypot(t[2],t[3])||9,1)
+    ]);
+    const x0=Math.max(0,Math.floor(Math.min(rect[0],rect[2])-2));
+    const x1=Math.min(canvas.width,Math.ceil(Math.max(rect[0],rect[2])+2));
+    const y0=Math.max(0,Math.floor(Math.min(rect[1],rect[3])-2));
+    const y1=Math.min(canvas.height,Math.ceil(Math.max(rect[1],rect[3])+2));
+    let redPixels=0,inkPixels=0;
+    if(x1>x0&&y1>y0){
+      const pixels=ctx.getImageData(x0,y0,x1-x0,y1-y0).data;
+      for(let i=0;i<pixels.length;i+=4){
+        const r=pixels[i],g=pixels[i+1],b=pixels[i+2],a=pixels[i+3];
+        if(a>40&&(r<245||g<245||b<245))inkPixels++;
+        if(a>40&&redColor(r,g,b))redPixels++;
+      }
+    }
+    const isRed=redPixels>=2 && redPixels/Math.max(inkPixels,1)>0.035;
+    const y=t[5]||0;
+    let group=groups.find(g=>Math.abs(g.y-y)<3.2);
+    if(!group){group={y,parts:[]};groups.push(group)}
+    group.parts.push({text:item.str,x:t[4]||0,red:isRed});
   }
   groups.sort((a,b)=>b.y-a.y);
   return groups.map(g=>{
@@ -142,6 +115,9 @@ async function importFiles(files){
       for(const q of extracted)await put("questions",q);
       await put("pdfs",{name:file.name,count:extracted.length,pages:pdf.numPages});
       total+=extracted.length;
+      if(extracted.length===0){
+        showToast(`${file.name}: PDF opened, but no valid questions were detected. Check that it contains selectable text and red answers.`);
+      }
     }catch(e){console.error(e);showToast(`Could not read ${file.name}: ${e.message||e}`)}
   }
   await refreshData();
