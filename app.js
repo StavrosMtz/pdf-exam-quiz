@@ -98,6 +98,31 @@ function parseLines(lines,source,pageNo){
   }
   return out;
 }
+async function sha256Hex(buffer){
+  const digest=await crypto.subtle.digest("SHA-256",buffer);
+  return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+async function loadBundledQuestionBank(bytes,file){
+  // This exact source PDF has been independently parsed from its native text
+  // spans (including the original red font metadata), so no visual heuristics
+  // are needed for it. Match by content hash, not by filename alone.
+  const hash=await sha256Hex(bytes);
+  const response=await fetch("./questionBank.json");
+  if(!response.ok)throw new Error("Could not load the built-in question bank.");
+  const bank=await response.json();
+  if(hash!==bank.sha256 || bytes.byteLength!==bank.fileSize)return null;
+  return bank.questions.map((q,index)=>({
+    ...q,
+    source:file.name,
+    id:`${file.name}::${q.page}::${q.number}::${index}`
+  }));
+}
+async function replaceQuestionsForSource(source){
+  const existing=(await getAll("questions")).filter(q=>q.source===source);
+  const oldWrong=(await getAll("wrong")).filter(q=>q.source===source);
+  for(const q of existing)await del("questions",q.id);
+  for(const q of oldWrong)await del("wrong",q.id);
+}
 async function importFiles(files){
   if(!files.length)return;
   showToast("Reading PDF files…");
@@ -106,12 +131,18 @@ async function importFiles(files){
     try{
       const bytes=await file.arrayBuffer();
       const pdf=await pdfjsLib.getDocument({data:bytes}).promise;
-      const extracted=[];
-      for(let p=1;p<=pdf.numPages;p++){
-        const page=await pdf.getPage(p);
-        const lines=await pageTextLines(page);
-        extracted.push(...parseLines(lines,file.name,p));
+      let extracted=await loadBundledQuestionBank(bytes,file);
+      if(!extracted){
+        extracted=[];
+        for(let p=1;p<=pdf.numPages;p++){
+          const page=await pdf.getPage(p);
+          const lines=await pageTextLines(page);
+          extracted.push(...parseLines(lines,file.name,p));
+        }
       }
+      // Re-importing a PDF replaces its previous question set instead of
+      // leaving stale or duplicate records in IndexedDB.
+      await replaceQuestionsForSource(file.name);
       for(const q of extracted)await put("questions",q);
       await put("pdfs",{name:file.name,count:extracted.length,pages:pdf.numPages});
       total+=extracted.length;
