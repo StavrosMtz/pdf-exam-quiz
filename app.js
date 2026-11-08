@@ -14,6 +14,7 @@ let selectedIndex = null;
 let answered = 0, score = 0, wrongThisRun = [];
 let timerHandle = null, timeLeft = 90, active = false, evaluated = false;
 let deferredInstall = null;
+let toastTimer = null;
 
 function openDB(){
   return new Promise((resolve,reject)=>{
@@ -27,7 +28,11 @@ function getAll(store){return new Promise((res,rej)=>{const r=tx(store).getAll()
 function put(store,value){return new Promise((res,rej)=>{const r=tx(store,"readwrite").put(value);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
 function del(store,key){return new Promise((res,rej)=>{const r=tx(store,"readwrite").delete(key);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
 
-function showToast(message){const t=$("toast");t.textContent=message;t.style.display="block";setTimeout(()=>t.style.display="none",3200)}
+function showToast(message,ms=3200){
+  const t=$("toast");t.textContent=message;t.style.whiteSpace="pre-line";t.style.display="block";
+  if(toastTimer)clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.style.display="none",ms);
+}
 function showScreen(id){for(const s of ["homeScreen","quizScreen","resultsScreen"])$(s).classList.toggle("hidden",s!==id)}
 function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function normalize(s){return s.replace(/\s+/g," ").trim()}
@@ -77,27 +82,47 @@ async function pageTextLines(page){
     return {text:normalize(g.parts.map(p=>p.text).join(" ")),red:g.parts.some(p=>p.red)};
   }).filter(x=>x.text);
 }
-function parseLines(lines,source,pageNo){
-  const starts=[];for(let i=0;i<lines.length;i++)if(/^\d{1,4}\.\s*/.test(lines[i].text))starts.push(i);
-  const out=[];
+
+// Option labels: Greek letters (α β γ δ) or Latin lookalikes (a b c d), followed by "." or ")".
+const LATIN_TO_GREEK={a:"α",b:"β",c:"γ",d:"δ"};
+const OPTION_RE=/^([αβγδ]|[abcd])\s*[.)]\s*(.*)$/i;
+
+// Parses the WHOLE document as one stream of lines (each line carries its page
+// number), so a question whose options continue on the next page is no longer
+// cut in half. Returns the valid questions and a list of skipped question numbers.
+function parseLines(lines,source){
+  // Drop lines that are just a page number (typical footer/header).
+  lines=lines.filter(l=>!/^\d{1,3}$/.test(l.text));
+  const starts=[];
+  for(let i=0;i<lines.length;i++)if(/^\d{1,4}\.\s*/.test(lines[i].text))starts.push(i);
+  const out=[],skipped=[];
   for(let q=0;q<starts.length;q++){
     const chunk=lines.slice(starts[q],starts[q+1]??lines.length);
     const m=chunk[0].text.match(/^(\d{1,4})\.\s*(.*)$/);if(!m)continue;
+    const number=Number(m[1]);
+    const pageNo=chunk[0].page;
     let qtext=m[2],opts=[],cur=null;
     for(const line of chunk.slice(1)){
-      const om=line.text.match(/^([αβγδ])\.\s*(.*)$/i);
-      if(om){if(cur)opts.push(cur);cur={label:om[1].toLowerCase(),text:om[2],correct:line.red};}
+      const om=line.text.match(OPTION_RE);
+      if(om){
+        if(cur)opts.push(cur);
+        const raw=om[1].toLowerCase();
+        cur={label:LATIN_TO_GREEK[raw]||raw,text:om[2],correct:line.red};
+      }
       else if(cur){cur.text=normalize(cur.text+" "+line.text);cur.correct=cur.correct||line.red;}
       else qtext=normalize(qtext+" "+line.text);
     }
     if(cur)opts.push(cur);
-    if(opts.length===4&&opts.filter(o=>o.correct).length===1){
-      const number=Number(m[1]);
+    const correctCount=opts.filter(o=>o.correct).length;
+    if(opts.length>=3&&opts.length<=6&&correctCount===1){
       out.push({id:`${source}::${pageNo}::${number}::${out.length}`,number,question:normalize(qtext),options:opts,source,page:pageNo});
+    }else{
+      skipped.push(`${number} (p.${pageNo}: ${opts.length} options, ${correctCount} red)`);
     }
   }
-  return out;
+  return {questions:out,skipped};
 }
+
 async function sha256Hex(buffer){
   const digest=await crypto.subtle.digest("SHA-256",buffer);
   return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,"0")).join("");
@@ -106,16 +131,23 @@ async function loadBundledQuestionBank(bytes,file){
   // This exact source PDF has been independently parsed from its native text
   // spans (including the original red font metadata), so no visual heuristics
   // are needed for it. Match by content hash, not by filename alone.
+  // Returns {hash, questions}; questions is null when there is no match
+  // (or the bank file could not be loaded), so the caller falls back to the parser.
   const hash=await sha256Hex(bytes);
-  const response=await fetch("./questionBank.json");
-  if(!response.ok)throw new Error("Could not load the built-in question bank.");
-  const bank=await response.json();
-  if(hash!==bank.sha256 || bytes.byteLength!==bank.fileSize)return null;
-  return bank.questions.map((q,index)=>({
-    ...q,
-    source:file.name,
-    id:`${file.name}::${q.page}::${q.number}::${index}`
-  }));
+  try{
+    const response=await fetch("./questionBank.json");
+    if(!response.ok)return {hash,questions:null};
+    const bank=await response.json();
+    if(hash!==bank.sha256 || bytes.byteLength!==bank.fileSize)return {hash,questions:null};
+    return {hash,questions:bank.questions.map((q,index)=>({
+      ...q,
+      source:file.name,
+      id:`${file.name}::${q.page}::${q.number}::${index}`
+    }))};
+  }catch(e){
+    console.error("Question bank unavailable, using parser:",e);
+    return {hash,questions:null};
+  }
 }
 async function replaceQuestionsForSource(source){
   const existing=(await getAll("questions")).filter(q=>q.source===source);
@@ -125,34 +157,44 @@ async function replaceQuestionsForSource(source){
 }
 async function importFiles(files){
   if(!files.length)return;
-  showToast("Reading PDF files…");
+  showToast("Reading PDF files…",60000);
   let total=0;
+  const report=[];
   for(const file of files){
     try{
       const bytes=await file.arrayBuffer();
       const pdf=await pdfjsLib.getDocument({data:bytes}).promise;
-      let extracted=await loadBundledQuestionBank(bytes,file);
+      const bank=await loadBundledQuestionBank(bytes,file);
+      const hash=bank.hash;
+      let extracted=bank.questions;
+      let via="built-in bank",skipped=[];
       if(!extracted){
-        extracted=[];
+        via="parser";
+        const allLines=[];
         for(let p=1;p<=pdf.numPages;p++){
           const page=await pdf.getPage(p);
           const lines=await pageTextLines(page);
-          extracted.push(...parseLines(lines,file.name,p));
+          for(const l of lines)allLines.push({...l,page:p});
         }
+        const result=parseLines(allLines,file.name);
+        extracted=result.questions;
+        skipped=result.skipped;
+        if(skipped.length)console.warn(`${file.name}: skipped ${skipped.length} question(s):`,skipped);
       }
       // Re-importing a PDF replaces its previous question set instead of
       // leaving stale or duplicate records in IndexedDB.
       await replaceQuestionsForSource(file.name);
       for(const q of extracted)await put("questions",q);
-      await put("pdfs",{name:file.name,count:extracted.length,pages:pdf.numPages});
+      await put("pdfs",{name:file.name,count:extracted.length,pages:pdf.numPages,via,hash:hash.slice(0,8),size:bytes.byteLength,skipped});
       total+=extracted.length;
+      report.push(`${file.name}: ${extracted.length} via ${via} (hash ${hash.slice(0,8)}, ${bytes.byteLength} bytes)${skipped.length?`, skipped ${skipped.length}`:""}`);
       if(extracted.length===0){
-        showToast(`${file.name}: PDF opened, but no valid questions were detected. Check that it contains selectable text and red answers.`);
+        report.push(`${file.name}: no valid questions detected. Check that it contains selectable text and red answers.`);
       }
-    }catch(e){console.error(e);showToast(`Could not read ${file.name}: ${e.message||e}`)}
+    }catch(e){console.error(e);report.push(`Could not read ${file.name}: ${e.message||e}`)}
   }
   await refreshData();
-  showToast(`Imported ${total} questions.`);
+  showToast(`Imported ${total} questions.\n${report.join("\n")}`,12000);
 }
 async function refreshData(){
   questions=await getAll("questions");
@@ -163,7 +205,14 @@ async function refreshData(){
   $("retryFromResults").disabled=wrongIds.size===0;
   $("retryHint").textContent=wrongIds.size?`${wrongIds.size} question(s) are waiting for another attempt.`:"No saved mistakes yet.";
   const pdfs=await getAll("pdfs");
-  $("libraryList").innerHTML=pdfs.length?pdfs.map(p=>`<div class="library-item"><div><strong>${escapeHTML(p.name)}</strong><small>${p.count} questions · ${p.pages} pages</small></div><button class="remove-btn" data-remove="${escapeHTML(p.name)}">Remove</button></div>`).join(""):"<p class='hint'>No PDFs imported yet.</p>";
+  $("libraryList").innerHTML=pdfs.length?pdfs.map(p=>{
+    const via=p.via?` · ${escapeHTML(p.via)}`:"";
+    const hash=p.hash?` · ${escapeHTML(p.hash)}`:"";
+    const skippedList=Array.isArray(p.skipped)&&p.skipped.length
+      ?`<small>Skipped ${p.skipped.length}: ${escapeHTML(p.skipped.slice(0,40).join("; "))}${p.skipped.length>40?"; …":""}</small>`
+      :"";
+    return `<div class="library-item"><div><strong>${escapeHTML(p.name)}</strong><small>${p.count} questions · ${p.pages} pages${via}${hash}</small>${skippedList}</div><button class="remove-btn" data-remove="${escapeHTML(p.name)}">Remove</button></div>`;
+  }).join(""):"<p class='hint'>No PDFs imported yet.</p>";
   $("libraryList").querySelectorAll("[data-remove]").forEach(b=>b.addEventListener("click",()=>removePdf(b.dataset.remove)));
 }
 async function removePdf(name){
