@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <meta name="description" content="Import PDF multiple-choice exams and practise offline.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+  <title>PDF Exam Quiz</title>
+</head>
+<body>
+<header class="app-header">
+  <div class="brand"><div class="brand-icon">Q</div><div><h1>PDF Exam Quiz</h1><p>Import your PDFs · Practise anywhere</p></div></div>
+  <button id="installBtn" class="small-btn hidden" type="button">Install app</button>
+</header>
+<main>
+  <section id="homeScreen" class="screen">
+    <div class="hero">
+      <div class="eyebrow">YOUR PERSONAL STUDY SPACE</div>
+      <h2>Turn your PDFs into quizzes.</h2>
+      <p>Choose one or more multiple-choice PDFs. Questions and red-marked answers are extracted on your device and saved for future practice.</p>
+    </div>
+    <div class="stats-grid">
+      <article class="stat-card"><strong id="loadedCount">0</strong><span>Questions loaded</span></article>
+      <article class="stat-card"><strong id="wrongCount">0</strong><span>Saved mistakes</span></article>
+    </div>
+
+    <section class="panel import-panel">
+      <div class="panel-heading"><div><span class="eyebrow">STEP 1</span><h2>Import PDF files</h2></div><span class="pdf-symbol">PDF</span></div>
+      <p class="hint">Select multiple PDFs at once. Files are processed locally in this browser; they are not uploaded to a server.</p>
+      <label for="pdfInput" class="upload-btn"><span class="upload-plus">＋</span><span><strong>Choose PDF files</strong><small>Multiple files supported</small></span></label>
+      <input id="pdfInput" type="file" accept="application/pdf,.pdf" multiple hidden>
+      <div id="importProgress" class="import-progress hidden">
+        <div class="progress-copy"><span id="importStatus">Preparing…</span><span id="importPercent">0%</span></div>
+        <div class="progress-track"><div id="importBar" class="progress-bar"></div></div>
+      </div>
+      <div class="notice"><strong>Answer detection:</strong> the app reads the red colour of the answer text itself, not red spaces or page decorations. Each detected question is checked for four options and one red answer.</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading"><div><span class="eyebrow">STEP 2</span><h2>Start a quiz</h2></div></div>
+      <label class="field-label" for="subjectSelect">PDF / subject</label>
+      <select id="subjectSelect" class="field"><option value="all">All imported PDFs</option></select>
+      <label class="field-label" for="questionCount">Number of questions</label>
+      <select id="questionCount" class="field">
+        <option value="10">10 questions</option><option value="20" selected>20 questions</option>
+        <option value="30">30 questions</option><option value="50">50 questions</option>
+        <option value="100">100 questions</option><option value="all">All available questions</option>
+      </select>
+      <label class="check-row"><input type="checkbox" id="shuffleAnswers"> Shuffle answer choices</label>
+      <button id="startQuiz" class="primary-btn wide" type="button">Start quiz <span>→</span></button>
+      <button id="retryWrong" class="outline-btn wide" type="button" disabled>Retry saved mistakes</button>
+      <p id="retryHint" class="hint center">Import a PDF to begin.</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading"><div><span class="eyebrow">YOUR LIBRARY</span><h2>Imported PDFs</h2></div><span id="pdfCount" class="muted small"></span></div>
+      <div id="libraryList" class="library-list"><p class="hint">No PDFs imported yet.</p></div>
+    </section>
+    <p class="privacy-note">PDFs, extracted questions and progress are stored locally on this device.</p>
+  </section>
+
+  <section id="quizScreen" class="screen hidden">
+    <div class="quiz-top">
+      <button id="homeBtn" class="small-btn" type="button">← Home</button>
+      <div id="progress" class="progress">Question 1 of 10</div>
+      <div id="timer" class="timer">01:30</div>
+    </div>
+    <div class="quiz-progress-track"><div id="quizProgressBar"></div></div>
+    <article class="question-card">
+      <div id="source" class="source">Source PDF · Page</div>
+      <div id="questionNumber" class="question-number"></div>
+      <h2 id="questionText">Question</h2>
+      <div id="answers" class="answers"></div>
+      <p id="feedback" class="feedback" aria-live="polite"></p>
+      <div class="action-row">
+        <button id="selectAnswer" class="primary-btn" type="button" disabled>Select answer</button>
+        <button id="nextQuestion" class="secondary-btn hidden" type="button">Next question →</button>
+      </div>
+    </article>
+  </section>
+
+  <section id="resultsScreen" class="screen hidden">
+    <article class="panel results-panel">
+      <div class="eyebrow">SESSION COMPLETE</div><h2>Quiz complete</h2>
+      <div id="resultScore" class="result-score">0 / 0</div>
+      <p id="resultPercent" class="hint"></p><p id="resultWrong" class="hint"></p>
+      <button id="retryFromResults" class="primary-btn wide" type="button">Retry saved mistakes</button>
+      <button id="backHome" class="outline-btn wide" type="button">Back to home</button>
+    </article>
+    <article class="panel"><h2>Questions to review</h2><div id="wrongReview" class="review-list"></div></article>
+  </section>
+</main>
+<div id="toast" class="toast" role="status"></div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
