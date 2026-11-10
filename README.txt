@@ -85,3 +85,12 @@ their native text and colour metadata: 1,613 questions, four options and one
 red answer per question. The app's browser-side pixel colour detection still
 needs a real-device check after deployment; use the import report to confirm
 the counts on your PDFs.
+
+
+DIAGNOSTIC BUILD v2.1
+---------------------
+If a PDF returns zero questions, the app now shows a "PDF import diagnostic"
+panel with the number of text lines and numbered question candidates, plus
+the first extracted lines. Use "Copy diagnostic" and send the copied text
+for troubleshooting. This avoids guessing whether the problem is PDF.js text
+extraction, question-number recognition, or option parsing.

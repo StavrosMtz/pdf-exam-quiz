@@ -140,7 +140,31 @@ function parseDocument(allLines,source){
       });
     }
   }
-  return {questions:out,candidates:starts.length,invalid:out.filter(q=>!q.gradeable)};
+  return {
+    questions:out,
+    candidates:starts.length,
+    rawNumberCandidates:candidates.length,
+    textLines:allLines.length,
+    usableLines:lines.length,
+    invalid:out.filter(q=>!q.gradeable),
+    sample:lines.slice(0,24).map(l=>`p${l.page}: ${l.text}`).join("\\n")
+  };
+}
+function showDiagnostic(message){
+  let box=$("diagnosticBox");
+  if(!box){
+    box=document.createElement("details");
+    box.id="diagnosticBox";
+    box.className="diagnostic-box";
+    box.innerHTML='<summary>PDF import diagnostic</summary><pre id="diagnosticText"></pre><button id="copyDiagnostic" class="outline-btn wide" type="button">Copy diagnostic</button>';
+    $("importProgress").after(box);
+    $("copyDiagnostic").addEventListener("click",async()=>{
+      try{await navigator.clipboard.writeText(window.lastPdfImportDiagnostic||"");toast("Diagnostic copied. Paste it into the chat.");}
+      catch(e){toast("Select and copy the diagnostic text manually.");}
+    });
+  }
+  $("diagnosticText").textContent=message;
+  box.open=true;
 }
 function updateProgress(label,done,total){
   const pct=total?Math.round(done/total*100):0;
@@ -167,8 +191,22 @@ async function importFiles(files){
         }
         const parsed=parseDocument(lines,file.name);
         if(parsed.questions.length===0){
-          failed++;console.warn("No questions detected",file.name,parsed);
-          toast(`${file.name}: no questions detected. Existing imported copy was kept.`);
+          failed++;
+          const diagnostic = [
+            `PDF: ${file.name}`,
+            `Pages: ${pdf.numPages}`,
+            `PDF.js text lines: ${parsed.textLines}`,
+            `Usable text lines: ${parsed.usableLines}`,
+            `Numbered candidates: ${parsed.rawNumberCandidates}`,
+            `Sequential question starts: ${parsed.candidates}`,
+            `Parsed questions: ${parsed.questions.length}`,
+            `First extracted lines:`,
+            parsed.sample || "(no selectable text lines were extracted)"
+          ].join("\\n");
+          window.lastPdfImportDiagnostic = diagnostic;
+          console.error("[PDF Exam Quiz] Import diagnostic\\n"+diagnostic);
+          showDiagnostic(diagnostic);
+          toast(`${file.name}: 0 questions. Open the diagnostic details shown below the import area and send them to me.`,7000);
           await pdf.destroy();continue;
         }
         // Only replace an existing same-name import after a non-empty parse.
